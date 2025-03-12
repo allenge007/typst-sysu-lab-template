@@ -314,15 +314,288 @@ fn efi_main() -> Status {
 
 == Makefile 过程
 
+```txt
+[+] Building: bootloader...
+[?] Executing: /Users/__allenge/.cargo/bin/cargo build --release in /Volumes/WorkSpace/Code/My_OS/pkg/boot //命令行中实际调用了 Cargo build --release。
+[?] Would copy: /Volumes/WorkSpace/Code/My_OS/target/x86_64-unknown-uefi/release/ysos_boot.efi -> /Volumes/WorkSpace/Code/My_OS/esp/EFI/BOOT/BOOTX64.EFI
+[?] Would copy: /Volumes/WorkSpace/Code/My_OS/pkg/kernel/config/boot.conf -> /Volumes/WorkSpace/Code/My_OS/esp/EFI/BOOT/boot.conf
+[+] Building: kernel...
+[?] Executing: /Users/__allenge/.cargo/bin/cargo build --release in /Volumes/WorkSpace/Code/My_OS/pkg/kernel
+[?] Would copy: /Volumes/WorkSpace/Code/My_OS/target/x86_64-unknown-none/release/ysos_kernel -> /Volumes/WorkSpace/Code/My_OS/esp/KERNEL.ELF
+[?] Executing: /opt/homebrew/bin/qemu-system-x86_64 -bios assets/OVMF.fd -net none -nographic -m 96M -drive format=raw,file=fat:esp -snapshot
+```
+
++ line1 表示 Makefile 开始在 pkg/boot 目录下执行 Cargo build
++ line2 命令行中调用了 Cargo build --release
++ line3 表明生成的启动程序会被复制到 ESP 目录
++ line4 表示 Makefile 开始在 pkg/kernel 目录下执行 Cargo build
++ line5 内核构建命令，调用了 Cargo build --release
++ line6 行表示内核 ELF 文件会被复制到 ESP 目录
++ line7 行表示 QEMU 启动命令，加载 OVMF.fd BIOS，关闭网络，使用 96M 内存，加载 ESP 目录作为硬盘，使用快照模式，启动模拟器加载 ESP 中的文件运行系统
+
 == Cargo 包管理工具
+
+Rust 第三方库（crate）的源代码主要托管在 GitHub、GitLab 或其他开源代码托管平台上，并通过 `crates.io` 发布。当在 `Cargo.toml` 中声明依赖后：
+
++ *下载源代码*
+    
+    Cargo 会自动下载依赖的源代码，并将其存放在本地缓存目录（通常是 `~/.cargo/registry/src`）。
++ *编译*
+
+    当执行 `cargo build` 时，Cargo 会根据依赖关系将这些库在项目编译过程中一并编译。也就是说，它们会在项目构建时从源代码编译成库文件（通常是 rlib 或动态链接库）。
+
 
 == \#[entry] 与 main
 
-= 附加题
+在无需标准库（no_std）的环境下，即 UEFI 程序中，我们不能依赖默认的 Rust 运行时来处理入口点。#[entry] 宏允许开发者定义一个自定义的入口函数（例如 efi_main），以匹配 UEFI 的启动规范，同时避免了使用标准库的运行时初始化工作。这保证了代码能在特定固件环境下正确运行，并与 UEFI 提供的 API 配合。
 
+= 附加题
 
 == 彩色的日志
 
+可以通过第三方库 `colored` 实现彩色的日志输出。`colored` 库利用 ANSI 转义序列来为终端输出添加颜色和样式。原理如下：
+
+- *扩展 Trait*
+
+    通过为 `String` 和 `&str` 实现了扩展 trait `Colorize`，库为文本添加了方法，如 `red()`、`green()`、`bold()` 等，用于设置文本颜色和样式。这些方法返回封装了原始文本和对应 ANSI 控制序列的包装类型。
+
+- *生成 ANSI 转义码*
+
+    每种颜色或样式对应一个特定的 ANSI 转义码。例如，当调用 `.red()` 方法时，库会在文本前后添加控制码 `\x1b[31m` 和 `\x1b[0m`，分别表示红色文本和重置样式，以实现红色的字符串输出效果。
+
+- *Display 实现*
+
+    封装后的类型实现了 ```rust std::fmt::Display``` trait，使得可以直接在 `println!` 宏中使用。例如，`println!("{}", "Hello".red())` 会输出红色的 "Hello"。
+
+一下是具体的代码（实现效果如图 1.1.3 所示）：
+
+```rust
+fn init_logging() {
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .format(|buf, record| {
+            let prefix_msg = record.args().to_string();
+            let formatted = match record.level() {
+                Level::Info => {
+                    // INFO：是绿色，后面的内容是白色
+                    format!(
+                        "{} {}",
+                        "[INFO]:".green(),
+                        prefix_msg.white()
+                    )
+                }
+                Level::Warn => {
+                    // “WARNING”是黄色加粗并加下划线，后面的内容是黄色加粗
+                    format!(
+                        "{} {}",
+                        "[WARNING]:".yellow().bold().underline(),
+                        prefix_msg.yellow().bold()
+                    )
+                }
+                Level::Error => {
+                    // “ERROR”及其后面内容是红色加粗，并居中
+                    let line = format!("[ERROR]: {}", prefix_msg).red().bold().to_string();
+                    if let Some((Width(width), _)) = terminal_size() {
+                        let lth = line.len() as u16;
+                        let spaces = (width.saturating_sub(lth)) / 2;
+                        format!("{}{}{}", "=".repeat(spaces as usize).red().bold(), line, "=".repeat(spaces as usize).red().bold())
+                    } else {
+                        format!("{}", line)
+                    }
+                }
+                _ => prefix_msg,
+            };
+            writeln!(buf, "{}", formatted)
+        })
+        .init();
+}
+```
+
 == Rust 实现简单 shell
 
+通过 Rust 实现了一个包含了 `ls`,`cd`,`cat` 命令的简单 `shell`。实现效果以及代码如下所示。
+
+#figure(image("./fig/6.png", width: 100%), caption: "简单 shell 运行效果")
+
+```rust
+/// 实现一个简单的 shell，支持 cd、ls 和 cat 命令
+fn run_shell() -> Result<(), Box<dyn std::error::Error>> {
+    let mut input = String::new();
+    loop {
+        // 提示符
+        print!("shell> ");
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim();
+        if input.is_empty() {
+            continue;
+        }
+        // 退出命令
+        if input == "exit" || input == "quit" {
+            break;
+        }
+        // 分解命令和参数
+        let mut parts = input.split_whitespace();
+        let cmd = parts.next().unwrap();
+        match cmd {
+            "cd" => {
+                if let Some(path) = parts.next() {
+                    // 切换当前工作目录（这里不检查目标是否存在）
+                    if let Err(e) = env::set_current_dir(path) {
+                        error!("cd: Failed to change directory to {}: {}", path, e);
+                    }
+                } else {
+                    println!("Usage: cd <directory>");
+                }
+            }
+            "ls" => {
+                let current_dir = env::current_dir()?;
+                println!("Listing directory: {:?}", current_dir);
+                println!("{:<20}\t{}\t{}\t{}", "Name", "Size", "Type", "CreatedTime");
+                for entry in fs::read_dir(current_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    let metadata = entry.metadata()?;
+                    let size = metadata.len();
+                    let created = match metadata.created() {
+                        Ok(time) => format!("{:?}", time),
+                        Err(_) => "Unknown".to_string(),
+                    };
+                    let file_name = path.file_name().unwrap().to_string_lossy();
+                    let colored_name = if metadata.is_dir() {
+                        file_name.blue().bold()
+                    } else if metadata.is_file() {
+                        file_name.green()
+                    } else {
+                        file_name.red()
+                    };
+                    let file_type = if metadata.is_dir() { "dir" } else { "file" };
+                    let created_display = match metadata.created() {
+                        Ok(time) => {
+                            let datetime: chrono::DateTime<chrono::Local> = time.into();
+                            datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                        }
+                        Err(_) => "Unknown".to_string(),
+                    };
+                    println!(
+                        "{:<20}\t{}\t{}\t{}",
+                        colored_name,
+                        size,
+                        file_type,
+                        created_display
+                    );
+                }
+            }
+            "cat" => {
+                if let Some(path) = parts.next() {
+                    match fs::read_to_string(path) {
+                        Ok(content) => println!("{}", content),
+                        Err(e) => error!("cat: Failed to read file {}: {}", path, e),
+                    }
+                } else {
+                    println!("Usage: cat <filename>");
+                }
+            }
+            _ => {
+                println!("Unknown command: {}", cmd);
+                println!("Supported commands: cd, ls, cat, exit");
+            }
+        }
+    }
+    Ok(())
+}
+```
+
 == 线程模型
+
+下面给出一个示例代码，分别用 static mut（不安全版本）和 AtomicU16（安全版本）来生成 UniqueId，并在多线程下测试它们是否能保证每次生成的 ID 都唯一。
+
+```rust
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::thread;
+
+#[derive(Debug, Eq, PartialEq)]
+struct UniqueIdUnsafe(u16);
+
+impl UniqueIdUnsafe {
+    // 使用 unsafe 的 static mut 实现，不保证线程安全
+    fn new() -> Self {
+        unsafe {
+            static mut COUNTER: u16 = 0;
+            let id = COUNTER;
+            // 模拟并发时可能产生竞态条件
+            COUNTER += 1;
+            UniqueIdUnsafe(id)
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct UniqueIdSafe(u16);
+
+impl UniqueIdSafe {
+    // 使用 AtomicU16 保证线程安全
+    fn new() -> Self {
+        static COUNTER: AtomicU16 = AtomicU16::new(0);
+        UniqueIdSafe(COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+fn main() {
+    // 用 static mut 生成 UniqueIdUnsafe，在多线程下测试是否有重复
+    let mut unsafe_handles = Vec::new();
+    for _ in 0..10 {
+        unsafe_handles.push(thread::spawn(|| {
+            let mut ids = Vec::new();
+            for _ in 0..1000 {
+                ids.push(UniqueIdUnsafe::new().0);
+            }
+            ids
+        }));
+    }
+    let mut unsafe_ids = Vec::new();
+    for h in unsafe_handles {
+        unsafe_ids.extend(h.join().unwrap());
+    }
+    let unique_unsafe: HashSet<u16> = unsafe_ids.iter().cloned().collect();
+    println!(
+        "Unsafe: total ids = {}, unique ids = {}",
+        unsafe_ids.len(),
+        unique_unsafe.len()
+    );
+
+    // 用 AtomicU16 生成 UniqueIdSafe，在多线程下测试是否有重复
+    let mut safe_handles = Vec::new();
+    for _ in 0..10 {
+        safe_handles.push(thread::spawn(|| {
+            let mut ids = Vec::new();
+            for _ in 0..1000 {
+                ids.push(UniqueIdSafe::new().0);
+            }
+            ids
+        }));
+    }
+    let mut safe_ids = Vec::new();
+    for h in safe_handles {
+        safe_ids.extend(h.join().unwrap());
+    }
+    let unique_safe: HashSet<u16> = safe_ids.iter().cloned().collect();
+    println!(
+        "Safe: total ids = {}, unique ids = {}",
+        safe_ids.len(),
+        unique_safe.len()
+    );
+}
+```
+
++ 在 `UniqueIdUnsafe::new()` 中，我们使用了 `static mut` 来存储计数器，这是不安全的，因为缺乏同步机制，多个线程可能同时访问和修改计数器，导致竞态条件。
+
++ 在 `UniqueIdSafe::new()` 中，我们使用了 `AtomicU16` 来存储计数器，这是线程安全的，因为 `AtomicU16` 提供了原子操作，保证了多线程下的正确性。
+
++ 主函数中，我们分别在多线程下生成了 1000 个 ID，然后统计了生成的 ID 总数和唯一 ID 数量。从输出结果可以看出，使用 `AtomicU16` 生成的 ID 是唯一的，而使用 `static mut` 生成的 ID 中存在重复。
+
+测试结果如下所示。
+
+#figure(image("./fig/7.png", width: 100%), caption: "线程模型测试结果")
