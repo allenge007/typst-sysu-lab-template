@@ -195,5 +195,7 @@
     ]
   ))
 
+  set par(first-line-indent: (amount: 2em, all: true))
+
   body
 }
