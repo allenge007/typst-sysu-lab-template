@@ -4,9 +4,9 @@
 
 原项目地址：https://github.com/Starlight0798/typst-nku-lab-template
 
-![demo](demo.png)
+![demo](./img/demo.png)
 
-![demo2](demo2.png)
+![demo2](./img/demo2.png)
 
 # Project Introduction
 
